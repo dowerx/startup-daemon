@@ -1,0 +1,57 @@
+services:
+  startup-daemon:
+    build:
+      context: ..
+    environment:
+      POKE_TOKEN: test-token
+      LABEL_PREFIX: startup
+      LISTEN_ADDRESS: :8080
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    user: "0:0"
+    networks:
+      - startup
+
+  traefik:
+    image: traefik:v3.7
+    command:
+      - --log.level=DEBUG
+      - --accesslog=true
+      - --api.dashboard=true
+      - --api.insecure=true
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=startup
+      - --entrypoints.web.address=:80
+    ports:
+      - "8080:80"
+      - "8082:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - startup
+
+  nginx:
+    image: nginx:alpine
+    labels:
+      - traefik.enable=true
+      - traefik.docker.allownonrunning=true
+      - traefik.http.routers.nginx.rule=Host(`nginx.localhost`)
+      - traefik.http.routers.nginx.entrypoints=web
+      - traefik.http.routers.nginx.middlewares=startup-auth-chain
+      - traefik.http.services.nginx.loadbalancer.server.url=http://nginx:80
+      - traefik.http.middlewares.startup-auth-credentials.headers.customrequestheaders.Authorization=Bearer test-token
+      - traefik.http.middlewares.startup-auth.forwardauth.address=http://startup-daemon:8080/v1/poke
+      - traefik.http.middlewares.startup-auth.forwardauth.authrequestheaders=Authorization,X-Forwarded-Host
+      - traefik.http.middlewares.startup-auth.forwardauth.trustforwardheader=true
+      - traefik.http.middlewares.startup-retry.retry.attempts=10
+      - traefik.http.middlewares.startup-retry.retry.initialinterval=500ms
+      - traefik.http.middlewares.startup-auth-chain.chain.middlewares=startup-auth-credentials,startup-auth,startup-retry
+      - startup.host=nginx.localhost
+      - startup.ttl=30s
+    networks:
+      - startup
+
+networks:
+  startup:
+    name: startup
